@@ -1,46 +1,107 @@
 import { useEffect, useMemo, useState } from "react";
 import { analystApi } from "../api/api";
-import TemplateForm from "../components/TemplateForm";
-import RuleTable from "../components/RuleTable";
 import SchemaViewer from "../components/SchemaViewer";
 
-const emptyRequirement = {
-  templateId: "",
-  title: "",
-  details: "",
-  status: "draft",
+/**
+ * Личный кабинет аналитика.
+ * Логика страницы:
+ *  1) пошаговый ввод требований (проект -> функционал -> системы/роли),
+ *  2) автогенерация схемы по введённым данным,
+ *  3) сохранение результата в backend через JWT (template + requirements + rules).
+ */
+const wizardSteps = [
+  "Название проекта",
+  "Функционал",
+  "Системы и роли",
+];
+
+const roleCatalog = ["аналитик", "админ", "архитектор", "тестировщик", "оператор"];
+
+const initialWizardState = {
+  projectName: "",
+  projectDescription: "",
+  functionalities: [""],
+  systemMode: "existing",
+  existingSystemId: "",
+  newSystemName: "",
+  selectedRoles: ["аналитик"],
+  customRole: "",
 };
 
+function toMermaid(graph) {
+  if (!graph?.nodes?.length) {
+    return "";
+  }
+  const lines = ["flowchart TD"];
+  graph.nodes.forEach((node) => {
+    lines.push(`  ${node.id}["${node.label.replace(/"/g, "'")}"]`);
+  });
+  graph.edges.forEach((edge) => {
+    lines.push(`  ${edge.from} --> ${edge.to}`);
+  });
+  return lines.join("\n");
+}
+
+function buildGraphModel(wizard, templates) {
+  const cleanFunctionalities = wizard.functionalities.map((item) => item.trim()).filter(Boolean);
+  const selectedSystemName =
+    wizard.systemMode === "existing"
+      ? templates.find((item) => String(item.id) === wizard.existingSystemId)?.name || "Система"
+      : wizard.newSystemName.trim() || "Новая система";
+
+  const projectLabel = wizard.projectName.trim() || "Проект";
+  const roleNodes = wizard.selectedRoles.length ? wizard.selectedRoles : ["аналитик"];
+
+  const nodes = [
+    { id: "project", label: projectLabel, x: 30, y: 40, color: "#dce7ff" },
+    { id: "system", label: selectedSystemName, x: 280, y: 40, color: "#eaf7ff" },
+  ];
+  const edges = [{ id: "edge-project-system", from: "project", to: "system" }];
+
+  cleanFunctionalities.forEach((item, index) => {
+    const nodeId = `func_${index}`;
+    nodes.push({
+      id: nodeId,
+      label: item,
+      x: 30 + index * 180,
+      y: 190,
+      color: "#f2f6ff",
+    });
+    edges.push({ id: `edge-system-${nodeId}`, from: "system", to: nodeId });
+  });
+
+  roleNodes.forEach((role, index) => {
+    const nodeId = `role_${index}`;
+    nodes.push({
+      id: nodeId,
+      label: role,
+      x: 280 + index * 170,
+      y: 320,
+      color: "#fff4ea",
+    });
+    cleanFunctionalities.forEach((_, funcIndex) => {
+      edges.push({
+        id: `edge-func-role-${funcIndex}-${index}`,
+        from: `func_${funcIndex}`,
+        to: nodeId,
+      });
+    });
+  });
+
+  return { nodes, edges };
+}
+
 function AnalystDashboard({ user, onLogout }) {
-  const [templates, setTemplates] = useState([]);
-  const [rules, setRules] = useState([]);
-  const [requirements, setRequirements] = useState([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState(null);
-  const [editingTemplate, setEditingTemplate] = useState(null);
-  const [requirementForm, setRequirementForm] = useState(emptyRequirement);
-  const [editingRequirementId, setEditingRequirementId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [step, setStep] = useState(0);
 
-  const selectedTemplate = useMemo(
-    () => templates.find((template) => template.id === selectedTemplateId) || null,
-    [templates, selectedTemplateId]
-  );
+  const [templates, setTemplates] = useState([]);
+  const [requirements, setRequirements] = useState([]);
+  const [rules, setRules] = useState([]);
 
-  const filteredRequirements = useMemo(() => {
-    if (!selectedTemplateId) {
-      return requirements;
-    }
-    return requirements.filter((item) => item.template_id === selectedTemplateId);
-  }, [requirements, selectedTemplateId]);
-
-  const filteredRules = useMemo(() => {
-    if (!selectedTemplateId) {
-      return rules;
-    }
-    return rules.filter((item) => item.template_id === selectedTemplateId);
-  }, [rules, selectedTemplateId]);
+  const [wizard, setWizard] = useState(initialWizardState);
 
   const parseError = (apiError) =>
     apiError?.response?.data?.message || apiError.message || "Неизвестная ошибка";
@@ -53,17 +114,16 @@ function AnalystDashboard({ user, onLogout }) {
         analystApi.listRequirements(),
         analystApi.listRules(),
       ]);
+      const nextTemplates = templatesResponse.data || [];
+      setTemplates(nextTemplates);
+      setRequirements(requirementsResponse.data || []);
+      setRules(rulesResponse.data || []);
 
-      const loadedTemplates = templatesResponse.data;
-      setTemplates(loadedTemplates);
-      setRequirements(requirementsResponse.data);
-      setRules(rulesResponse.data);
-
-      if (loadedTemplates.length && !selectedTemplateId) {
-        const firstTemplateId = loadedTemplates[0].id;
-        setSelectedTemplateId(firstTemplateId);
-        setRequirementForm((prev) => ({ ...prev, templateId: String(firstTemplateId) }));
-      }
+      setWizard((prev) => ({
+        ...prev,
+        existingSystemId:
+          prev.existingSystemId || (nextTemplates[0] ? String(nextTemplates[0].id) : ""),
+      }));
       setError("");
     } catch (apiError) {
       setError(parseError(apiError));
@@ -77,121 +137,134 @@ function AnalystDashboard({ user, onLogout }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleCreateTemplate = async (payload) => {
-    try {
-      await analystApi.createTemplate(payload);
-      setMessage("Шаблон создан");
-      await loadData();
-    } catch (apiError) {
-      setError(parseError(apiError));
-    }
+  const graphModel = useMemo(() => buildGraphModel(wizard, templates), [wizard, templates]);
+
+  const notify = (text) => {
+    setMessage(text);
+    setTimeout(() => setMessage(""), 2200);
   };
 
-  const handleUpdateTemplate = async (payload) => {
-    if (!editingTemplate) {
-      return;
-    }
-    try {
-      await analystApi.updateTemplate(editingTemplate.id, payload);
-      setEditingTemplate(null);
-      setMessage("Шаблон обновлен");
-      await loadData();
-    } catch (apiError) {
-      setError(parseError(apiError));
-    }
-  };
-
-  const handleDeleteTemplate = async (id) => {
-    if (!window.confirm("Удалить шаблон?")) {
-      return;
-    }
-    try {
-      await analystApi.deleteTemplate(id);
-      if (selectedTemplateId === id) {
-        setSelectedTemplateId(null);
-      }
-      setMessage("Шаблон удален");
-      await loadData();
-    } catch (apiError) {
-      setError(parseError(apiError));
-    }
-  };
-
-  const submitRequirement = async (event) => {
-    event.preventDefault();
-    try {
-      if (editingRequirementId) {
-        await analystApi.updateRequirement(editingRequirementId, {
-          ...requirementForm,
-          templateId: Number(requirementForm.templateId),
-        });
-        setMessage("Требование обновлено");
-      } else {
-        await analystApi.createRequirement({
-          ...requirementForm,
-          templateId: Number(requirementForm.templateId),
-        });
-        setMessage("Требование создано");
-      }
-      setRequirementForm((prev) => ({
-        ...emptyRequirement,
-        templateId: prev.templateId || (selectedTemplateId ? String(selectedTemplateId) : ""),
-      }));
-      setEditingRequirementId(null);
-      await loadData();
-    } catch (apiError) {
-      setError(parseError(apiError));
-    }
-  };
-
-  const editRequirement = (requirement) => {
-    setEditingRequirementId(requirement.id);
-    setRequirementForm({
-      templateId: String(requirement.template_id),
-      title: requirement.title,
-      details: requirement.details || "",
-      status: requirement.status || "draft",
+  const updateFunctionality = (index, value) => {
+    setWizard((prev) => {
+      const next = [...prev.functionalities];
+      next[index] = value;
+      return { ...prev, functionalities: next };
     });
   };
 
-  const removeRequirement = async (id) => {
-    if (!window.confirm("Удалить требование?")) {
+  const addFunctionality = () => {
+    setWizard((prev) => ({ ...prev, functionalities: [...prev.functionalities, ""] }));
+  };
+
+  const removeFunctionality = (index) => {
+    setWizard((prev) => {
+      const next = prev.functionalities.filter((_, i) => i !== index);
+      return { ...prev, functionalities: next.length ? next : [""] };
+    });
+  };
+
+  const toggleRole = (role) => {
+    setWizard((prev) => {
+      const isSelected = prev.selectedRoles.includes(role);
+      return {
+        ...prev,
+        selectedRoles: isSelected
+          ? prev.selectedRoles.filter((item) => item !== role)
+          : [...prev.selectedRoles, role],
+      };
+    });
+  };
+
+  const addCustomRole = () => {
+    const normalized = wizard.customRole.trim().toLowerCase();
+    if (!normalized) {
       return;
     }
+    if (!wizard.selectedRoles.includes(normalized)) {
+      setWizard((prev) => ({
+        ...prev,
+        selectedRoles: [...prev.selectedRoles, normalized],
+        customRole: "",
+      }));
+    } else {
+      setWizard((prev) => ({ ...prev, customRole: "" }));
+    }
+  };
+
+  const canGoNext =
+    (step === 0 && wizard.projectName.trim()) ||
+    (step === 1 && wizard.functionalities.some((item) => item.trim())) ||
+    (step === 2 &&
+      (wizard.systemMode === "existing" ? wizard.existingSystemId : wizard.newSystemName.trim()));
+
+  const createRequirementsPackage = async () => {
+    const cleanFunctionalities = wizard.functionalities.map((item) => item.trim()).filter(Boolean);
+    if (!wizard.projectName.trim() || !cleanFunctionalities.length) {
+      setError("Укажите проект и хотя бы одну функцию");
+      return;
+    }
+
+    const selectedRoles = wizard.selectedRoles.length ? wizard.selectedRoles : ["аналитик"];
+
+    let systemId;
+    if (wizard.systemMode === "existing") {
+      systemId = Number(wizard.existingSystemId);
+    } else {
+      const createdSystem = await analystApi.createTemplate({
+        name: wizard.newSystemName.trim(),
+        description: wizard.projectDescription.trim(),
+        schema: toMermaid(graphModel),
+      });
+      systemId = createdSystem.data.id;
+    }
+
+    // Сохраняем требования по каждой функции.
+    for (const functionality of cleanFunctionalities) {
+      await analystApi.createRequirement({
+        templateId: systemId,
+        title: `${wizard.projectName.trim()}: ${functionality}`,
+        details: `${wizard.projectDescription.trim()}\nРоли: ${selectedRoles.join(", ")}`,
+        status: "draft",
+      });
+    }
+
+    // Сохраняем правила для выбранных ролей.
+    for (const [index, roleName] of selectedRoles.entries()) {
+      await analystApi.createRule({
+        templateId: systemId,
+        name: `${wizard.projectName.trim()} / ${roleName}`,
+        conditionText: `Функции: ${cleanFunctionalities.join(", ")}`,
+        actionText: `Роль ${roleName} обрабатывает сценарии проекта`,
+        priority: Math.max(1, selectedRoles.length - index),
+      });
+    }
+  };
+
+  const saveWizard = async () => {
     try {
-      await analystApi.deleteRequirement(id);
-      setMessage("Требование удалено");
+      await createRequirementsPackage();
+      notify("Требования, система и правила сохранены");
+      setStep(0);
+      setWizard((prev) => ({
+        ...initialWizardState,
+        existingSystemId: prev.existingSystemId || "",
+      }));
       await loadData();
     } catch (apiError) {
       setError(parseError(apiError));
     }
   };
 
-  const createRule = async (payload) => {
-    await analystApi.createRule(payload);
-    await loadData();
-  };
-
-  const updateRule = async (id, payload) => {
-    await analystApi.updateRule(id, payload);
-    await loadData();
-  };
-
-  const deleteRule = async (id) => {
-    await analystApi.deleteRule(id);
-    await loadData();
-  };
-
   if (loading) {
-    return <p>Загрузка кабинета аналитика...</p>;
+    return <p style={{ padding: 20 }}>Загрузка кабинета аналитика...</p>;
   }
 
   return (
     <main style={styles.page}>
       <header style={styles.header}>
         <div>
-          <h1>Кабинет аналитика</h1>
-          <p>
+          <h1 style={styles.title}>Личный кабинет: Аналитик</h1>
+          <p style={styles.subtitle}>
             Пользователь: {user.name} ({user.role})
           </p>
         </div>
@@ -201,219 +274,309 @@ function AnalystDashboard({ user, onLogout }) {
       {error ? <div style={styles.error}>{error}</div> : null}
       {message ? <div style={styles.message}>{message}</div> : null}
 
-      <section style={styles.grid}>
-        <TemplateForm
-          onSubmit={editingTemplate ? handleUpdateTemplate : handleCreateTemplate}
-          initialTemplate={editingTemplate}
-          submitLabel={editingTemplate ? "Обновить шаблон" : "Создать шаблон"}
-          onCancel={editingTemplate ? () => setEditingTemplate(null) : undefined}
-        />
-
-        <section style={styles.card}>
-          <h3>Список шаблонов</h3>
-          <select
-            style={styles.select}
-            value={selectedTemplateId || ""}
-            onChange={(event) => setSelectedTemplateId(Number(event.target.value))}
-          >
-            <option value="">Выберите шаблон для просмотра</option>
-            {templates.map((template) => (
-              <option key={template.id} value={template.id}>
-                #{template.id} {template.name}
-              </option>
-            ))}
-          </select>
-          <ul style={styles.list}>
-            {templates.map((template) => (
-              <li key={template.id} style={styles.listItem}>
-                <div>
-                  <strong>{template.name}</strong>
-                  <div style={styles.muted}>{template.description || "Без описания"}</div>
-                </div>
-                <div style={styles.row}>
-                  <button type="button" onClick={() => setEditingTemplate(template)}>
-                    Редактировать
-                  </button>
-                  <button type="button" onClick={() => handleDeleteTemplate(template.id)}>
-                    Удалить
-                  </button>
-                </div>
-              </li>
-            ))}
-            {!templates.length ? <li>Шаблонов пока нет</li> : null}
-          </ul>
-        </section>
-
-        <SchemaViewer schema={selectedTemplate?.schema} />
-      </section>
-
       <section style={styles.card}>
-        <h3>{editingRequirementId ? "Редактирование требования" : "Новое требование"}</h3>
-        <form onSubmit={submitRequirement} style={styles.formGrid}>
-          <select
-            required
-            value={requirementForm.templateId}
-            onChange={(event) =>
-              setRequirementForm((prev) => ({ ...prev, templateId: event.target.value }))
-            }
-          >
-            <option value="">Выберите шаблон</option>
-            {templates.map((template) => (
-              <option key={template.id} value={template.id}>
-                #{template.id} {template.name}
-              </option>
-            ))}
-          </select>
-          <input
-            required
-            placeholder="Заголовок требования"
-            value={requirementForm.title}
-            onChange={(event) => setRequirementForm((prev) => ({ ...prev, title: event.target.value }))}
-          />
-          <input
-            placeholder="Подробности"
-            value={requirementForm.details}
-            onChange={(event) =>
-              setRequirementForm((prev) => ({ ...prev, details: event.target.value }))
-            }
-          />
-          <select
-            value={requirementForm.status}
-            onChange={(event) => setRequirementForm((prev) => ({ ...prev, status: event.target.value }))}
-          >
-            <option value="draft">draft</option>
-            <option value="approved">approved</option>
-            <option value="rejected">rejected</option>
-          </select>
-          <button type="submit">
-            {editingRequirementId ? "Сохранить требование" : "Добавить требование"}
-          </button>
-          {editingRequirementId ? (
-            <button
-              type="button"
-              onClick={() => {
-                setEditingRequirementId(null);
-                setRequirementForm(emptyRequirement);
+        <h3>Пошаговый ввод требований</h3>
+        <div style={styles.stepRow}>
+          {wizardSteps.map((name, index) => (
+            <div
+              key={name}
+              style={{
+                ...styles.stepBadge,
+                ...(index === step ? styles.stepBadgeActive : {}),
               }}
             >
-              Отмена
-            </button>
-          ) : null}
-        </form>
+              {index + 1}. {name}
+            </div>
+          ))}
+        </div>
 
-        <table style={styles.table}>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Template</th>
-              <th>Title</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredRequirements.map((requirement) => (
-              <tr key={requirement.id}>
-                <td>{requirement.id}</td>
-                <td>{requirement.template_id}</td>
-                <td>{requirement.title}</td>
-                <td>{requirement.status}</td>
-                <td style={styles.row}>
-                  <button type="button" onClick={() => editRequirement(requirement)}>
-                    Edit
-                  </button>
-                  <button type="button" onClick={() => removeRequirement(requirement.id)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
+        {step === 0 ? (
+          <div style={styles.formGrid}>
+            <input
+              placeholder="Название проекта"
+              value={wizard.projectName}
+              onChange={(event) =>
+                setWizard((prev) => ({ ...prev, projectName: event.target.value }))
+              }
+            />
+            <textarea
+              rows={4}
+              placeholder="Краткое описание проекта"
+              value={wizard.projectDescription}
+              onChange={(event) =>
+                setWizard((prev) => ({ ...prev, projectDescription: event.target.value }))
+              }
+            />
+          </div>
+        ) : null}
+
+        {step === 1 ? (
+          <div style={styles.cardInner}>
+            {wizard.functionalities.map((item, index) => (
+              <div key={`func-${index}`} style={styles.functionRow}>
+                <input
+                  placeholder={`Функция #${index + 1}`}
+                  value={item}
+                  onChange={(event) => updateFunctionality(index, event.target.value)}
+                />
+                <button type="button" onClick={() => removeFunctionality(index)}>
+                  Удалить
+                </button>
+              </div>
             ))}
-            {!filteredRequirements.length ? (
-              <tr>
-                <td colSpan={5}>Требований нет</td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+            <button type="button" onClick={addFunctionality}>
+              + Добавить функционал
+            </button>
+          </div>
+        ) : null}
+
+        {step === 2 ? (
+          <div style={styles.cardInner}>
+            <div style={styles.inlineGroup}>
+              <label style={styles.radioLabel}>
+                <input
+                  type="radio"
+                  checked={wizard.systemMode === "existing"}
+                  onChange={() => setWizard((prev) => ({ ...prev, systemMode: "existing" }))}
+                />
+                Выбрать существующую систему
+              </label>
+              <label style={styles.radioLabel}>
+                <input
+                  type="radio"
+                  checked={wizard.systemMode === "new"}
+                  onChange={() => setWizard((prev) => ({ ...prev, systemMode: "new" }))}
+                />
+                Создать новую систему
+              </label>
+            </div>
+
+            {wizard.systemMode === "existing" ? (
+              <select
+                value={wizard.existingSystemId}
+                onChange={(event) =>
+                  setWizard((prev) => ({ ...prev, existingSystemId: event.target.value }))
+                }
+              >
+                <option value="">Выберите систему</option>
+                {templates.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                placeholder="Название новой системы"
+                value={wizard.newSystemName}
+                onChange={(event) =>
+                  setWizard((prev) => ({ ...prev, newSystemName: event.target.value }))
+                }
+              />
+            )}
+
+            <div style={styles.rolesBox}>
+              <strong>Выберите роли</strong>
+              <div style={styles.roleGrid}>
+                {roleCatalog.map((role) => (
+                  <label key={role} style={styles.checkboxLabel}>
+                    <input
+                      type="checkbox"
+                      checked={wizard.selectedRoles.includes(role)}
+                      onChange={() => toggleRole(role)}
+                    />
+                    {role}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div style={styles.inlineGroup}>
+              <input
+                placeholder="Добавить свою роль"
+                value={wizard.customRole}
+                onChange={(event) => setWizard((prev) => ({ ...prev, customRole: event.target.value }))}
+              />
+              <button type="button" onClick={addCustomRole}>
+                Добавить роль
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        <div style={styles.navButtons}>
+          <button type="button" onClick={() => setStep((prev) => Math.max(0, prev - 1))} disabled={step === 0}>
+            Назад
+          </button>
+          {step < wizardSteps.length - 1 ? (
+            <button type="button" disabled={!canGoNext} onClick={() => setStep((prev) => prev + 1)}>
+              Далее
+            </button>
+          ) : (
+            <button type="button" disabled={!canGoNext} onClick={saveWizard}>
+              Сохранить требования
+            </button>
+          )}
+        </div>
       </section>
 
-      <RuleTable
-        rules={filteredRules}
-        templates={templates}
-        onCreate={createRule}
-        onUpdate={updateRule}
-        onDelete={deleteRule}
+      <SchemaViewer
+        title="Автоматически сгенерированная схема требований"
+        graph={graphModel}
+        onGraphChange={() => {}}
       />
+
+      <section style={styles.grid}>
+        <section style={styles.card}>
+          <h3>Последние требования</h3>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Система</th>
+                <th>Требование</th>
+                <th>Статус</th>
+              </tr>
+            </thead>
+            <tbody>
+              {requirements.slice(0, 10).map((item) => (
+                <tr key={item.id}>
+                  <td>{item.id}</td>
+                  <td>{item.template_id}</td>
+                  <td>{item.title}</td>
+                  <td>{item.status}</td>
+                </tr>
+              ))}
+              {!requirements.length ? (
+                <tr>
+                  <td colSpan={4}>Список пуст</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </section>
+
+        <section style={styles.card}>
+          <h3>Последние правила</h3>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Система</th>
+                <th>Название</th>
+                <th>Приоритет</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rules.slice(0, 10).map((item) => (
+                <tr key={item.id}>
+                  <td>{item.id}</td>
+                  <td>{item.template_id}</td>
+                  <td>{item.name}</td>
+                  <td>{item.priority}</td>
+                </tr>
+              ))}
+              {!rules.length ? (
+                <tr>
+                  <td colSpan={4}>Список пуст</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </section>
+      </section>
     </main>
   );
 }
 
 const styles = {
   page: {
-    maxWidth: 1200,
+    maxWidth: 1280,
     margin: "0 auto",
     padding: 20,
-    display: "grid",
-    gap: 16,
-    background: "#f5f7fb",
+    background: "#f4f7ff",
     minHeight: "100vh",
+    display: "grid",
+    gap: 14,
   },
   header: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    background: "#fff",
-    borderRadius: 8,
-    padding: "12px 16px",
-    border: "1px solid #ddd",
-  },
-  grid: {
-    display: "grid",
-    gap: 16,
-    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-  },
-  card: {
-    border: "1px solid #ddd",
-    borderRadius: 8,
+    border: "1px solid #dde2f2",
+    borderRadius: 12,
     padding: 16,
     background: "#fff",
   },
-  formGrid: {
+  title: { margin: 0 },
+  subtitle: { margin: "4px 0 0", color: "#4d5a82" },
+  card: {
+    border: "1px solid #dde2f2",
+    borderRadius: 12,
+    padding: 16,
+    background: "#fff",
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-    gap: 8,
-    marginBottom: 12,
+    gap: 12,
   },
-  list: {
-    listStyle: "none",
-    padding: 0,
+  cardInner: { display: "grid", gap: 10 },
+  stepRow: { display: "flex", gap: 8, flexWrap: "wrap" },
+  stepBadge: {
+    border: "1px solid #cad2ee",
+    borderRadius: 999,
+    padding: "6px 10px",
+    color: "#4d5a82",
+  },
+  stepBadgeActive: {
+    borderColor: "#1f4fff",
+    background: "#edf2ff",
+    color: "#1f4fff",
+    fontWeight: 600,
+  },
+  formGrid: { display: "grid", gap: 10 },
+  functionRow: {
     display: "grid",
+    gridTemplateColumns: "1fr auto",
     gap: 8,
   },
-  listItem: {
+  inlineGroup: {
     display: "flex",
-    justifyContent: "space-between",
     gap: 8,
-    border: "1px solid #eee",
-    borderRadius: 6,
-    padding: 8,
+    flexWrap: "wrap",
+    alignItems: "center",
   },
-  row: { display: "flex", gap: 6 },
-  select: { width: "100%", marginBottom: 10, padding: 8 },
+  radioLabel: { display: "flex", alignItems: "center", gap: 6 },
+  rolesBox: {
+    border: "1px solid #e6ebfb",
+    borderRadius: 10,
+    padding: 10,
+    display: "grid",
+    gap: 8,
+  },
+  roleGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+    gap: 6,
+  },
+  checkboxLabel: { display: "flex", alignItems: "center", gap: 6 },
+  navButtons: { display: "flex", gap: 8, justifyContent: "flex-end" },
+  grid: {
+    display: "grid",
+    gap: 14,
+    gridTemplateColumns: "1fr 1fr",
+  },
   table: { width: "100%", borderCollapse: "collapse" },
-  muted: { color: "#666", fontSize: 13 },
   error: {
     color: "#900",
     background: "#ffeaea",
     border: "1px solid #f0b1b1",
-    borderRadius: 6,
+    borderRadius: 8,
     padding: 10,
   },
   message: {
     color: "#0b5",
     background: "#ebfff4",
     border: "1px solid #9ce2be",
-    borderRadius: 6,
+    borderRadius: 8,
     padding: 10,
   },
 };

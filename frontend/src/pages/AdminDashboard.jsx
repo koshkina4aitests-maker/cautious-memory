@@ -4,69 +4,68 @@ import TemplateForm from "../components/TemplateForm";
 import RuleTable from "../components/RuleTable";
 import SchemaViewer from "../components/SchemaViewer";
 
-const emptyUser = {
+/**
+ * Личный кабинет администратора.
+ * Содержит 3 вкладки:
+ *  - Системы: CRUD систем (templates),
+ *  - Роли: CRUD пользователей и их ролей,
+ *  - Правила: CRUD бизнес-правил с выбором системы и роли.
+ */
+const tabs = [
+  { id: "systems", label: "Системы" },
+  { id: "roles", label: "Роли" },
+  { id: "rules", label: "Правила" },
+];
+
+const emptyRoleForm = {
   name: "",
   email: "",
   password: "",
   role: "аналитик",
 };
 
-const emptyRequirement = {
-  templateId: "",
-  title: "",
-  details: "",
-  status: "draft",
-  analystId: "",
-};
-
 function AdminDashboard({ user, onLogout }) {
-  const [users, setUsers] = useState([]);
-  const [templates, setTemplates] = useState([]);
-  const [requirements, setRequirements] = useState([]);
-  const [rules, setRules] = useState([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState(null);
-
-  const [userForm, setUserForm] = useState(emptyUser);
-  const [editingUserId, setEditingUserId] = useState(null);
-
-  const [editingTemplate, setEditingTemplate] = useState(null);
-
-  const [requirementForm, setRequirementForm] = useState(emptyRequirement);
-  const [editingRequirementId, setEditingRequirementId] = useState(null);
-
+  const [activeTab, setActiveTab] = useState("systems");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
+  const [systems, setSystems] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [rules, setRules] = useState([]);
+
+  const [selectedSystemId, setSelectedSystemId] = useState(null);
+  const [editingSystem, setEditingSystem] = useState(null);
+
+  const [roleForm, setRoleForm] = useState(emptyRoleForm);
+  const [editingRoleId, setEditingRoleId] = useState(null);
+
   const parseError = (apiError) =>
     apiError?.response?.data?.message || apiError.message || "Неизвестная ошибка";
 
-  const selectedTemplate = useMemo(
-    () => templates.find((template) => template.id === selectedTemplateId) || null,
-    [templates, selectedTemplateId]
+  const selectedSystem = useMemo(
+    () => systems.find((item) => item.id === selectedSystemId) || null,
+    [systems, selectedSystemId]
   );
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [usersResponse, templatesResponse, requirementsResponse, rulesResponse] = await Promise.all([
-        adminApi.listUsers(),
+      const [systemsResponse, rolesResponse, rulesResponse] = await Promise.all([
         adminApi.listTemplates(),
-        adminApi.listRequirements(),
+        adminApi.listUsers(),
         adminApi.listRules(),
       ]);
 
-      const loadedTemplates = templatesResponse.data;
-      setUsers(usersResponse.data);
-      setTemplates(loadedTemplates);
-      setRequirements(requirementsResponse.data);
-      setRules(rulesResponse.data);
+      const nextSystems = systemsResponse.data || [];
+      setSystems(nextSystems);
+      setRoles(rolesResponse.data || []);
+      setRules(rulesResponse.data || []);
 
-      if (loadedTemplates.length && !selectedTemplateId) {
-        const firstId = loadedTemplates[0].id;
-        setSelectedTemplateId(firstId);
-        setRequirementForm((prev) => ({ ...prev, templateId: String(firstId) }));
+      if (nextSystems.length && !selectedSystemId) {
+        setSelectedSystemId(nextSystems[0].id);
       }
+
       setError("");
     } catch (apiError) {
       setError(parseError(apiError));
@@ -80,472 +79,419 @@ function AdminDashboard({ user, onLogout }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const submitUser = async (event) => {
-    event.preventDefault();
-    try {
-      if (editingUserId) {
-        const payload = {
-          name: userForm.name,
-          email: userForm.email,
-          role: userForm.role,
-        };
-        if (userForm.password) {
-          payload.password = userForm.password;
-        }
-        await adminApi.updateUser(editingUserId, payload);
-        setMessage("Пользователь обновлен");
-      } else {
-        await adminApi.createUser(userForm);
-        setMessage("Пользователь создан");
-      }
-      setUserForm(emptyUser);
-      setEditingUserId(null);
-      await loadData();
-    } catch (apiError) {
-      setError(parseError(apiError));
-    }
+  const notify = (text) => {
+    setMessage(text);
+    setTimeout(() => setMessage(""), 2200);
   };
 
-  const editUser = (targetUser) => {
-    setEditingUserId(targetUser.id);
-    setUserForm({
-      name: targetUser.name,
-      email: targetUser.email,
-      password: "",
-      role: targetUser.role,
-    });
-  };
-
-  const removeUser = async (id) => {
-    if (!window.confirm("Удалить пользователя?")) {
-      return;
-    }
-    try {
-      await adminApi.deleteUser(id);
-      setMessage("Пользователь удален");
-      await loadData();
-    } catch (apiError) {
-      setError(parseError(apiError));
-    }
-  };
-
-  const createTemplate = async (payload) => {
+  // --- Системы (templates) ---
+  const createSystem = async (payload) => {
     try {
       await adminApi.createTemplate(payload);
-      setMessage("Шаблон создан");
+      notify("Система добавлена");
       await loadData();
     } catch (apiError) {
       setError(parseError(apiError));
     }
   };
 
-  const updateTemplate = async (payload) => {
-    if (!editingTemplate) {
+  const updateSystem = async (payload) => {
+    if (!editingSystem) {
       return;
     }
     try {
-      await adminApi.updateTemplate(editingTemplate.id, payload);
-      setEditingTemplate(null);
-      setMessage("Шаблон обновлен");
+      await adminApi.updateTemplate(editingSystem.id, payload);
+      setEditingSystem(null);
+      notify("Система обновлена");
       await loadData();
     } catch (apiError) {
       setError(parseError(apiError));
     }
   };
 
-  const removeTemplate = async (id) => {
-    if (!window.confirm("Удалить шаблон?")) {
+  const removeSystem = async (id) => {
+    if (!window.confirm("Удалить систему?")) {
       return;
     }
     try {
       await adminApi.deleteTemplate(id);
-      setMessage("Шаблон удален");
+      if (selectedSystemId === id) {
+        setSelectedSystemId(null);
+      }
+      notify("Система удалена");
       await loadData();
     } catch (apiError) {
       setError(parseError(apiError));
     }
   };
 
-  const submitRequirement = async (event) => {
+  // --- Роли (users) ---
+  const submitRole = async (event) => {
     event.preventDefault();
     try {
-      const payload = {
-        templateId: Number(requirementForm.templateId),
-        title: requirementForm.title,
-        details: requirementForm.details,
-        status: requirementForm.status,
-        analystId: requirementForm.analystId ? Number(requirementForm.analystId) : null,
-      };
-      if (editingRequirementId) {
-        await adminApi.updateRequirement(editingRequirementId, payload);
-        setMessage("Требование обновлено");
+      if (editingRoleId) {
+        const payload = {
+          name: roleForm.name.trim(),
+          email: roleForm.email.trim(),
+          role: roleForm.role,
+        };
+        if (roleForm.password.trim()) {
+          payload.password = roleForm.password;
+        }
+        await adminApi.updateUser(editingRoleId, payload);
+        notify("Роль/пользователь обновлены");
       } else {
-        await adminApi.createRequirement(payload);
-        setMessage("Требование создано");
+        await adminApi.createUser({
+          name: roleForm.name.trim(),
+          email: roleForm.email.trim(),
+          password: roleForm.password,
+          role: roleForm.role,
+        });
+        notify("Роль/пользователь добавлены");
       }
-      setEditingRequirementId(null);
-      setRequirementForm(emptyRequirement);
+
+      setRoleForm(emptyRoleForm);
+      setEditingRoleId(null);
       await loadData();
     } catch (apiError) {
       setError(parseError(apiError));
     }
   };
 
-  const editRequirement = (item) => {
-    setEditingRequirementId(item.id);
-    setRequirementForm({
-      templateId: String(item.template_id),
-      title: item.title,
-      details: item.details || "",
-      status: item.status || "draft",
-      analystId: item.analyst_id ? String(item.analyst_id) : "",
+  const startEditRole = (target) => {
+    setEditingRoleId(target.id);
+    setRoleForm({
+      name: target.name || "",
+      email: target.email || "",
+      password: "",
+      role: target.role || "аналитик",
     });
   };
 
-  const removeRequirement = async (id) => {
-    if (!window.confirm("Удалить требование?")) {
+  const removeRole = async (id) => {
+    if (!window.confirm("Удалить роль/пользователя?")) {
       return;
     }
     try {
-      await adminApi.deleteRequirement(id);
-      setMessage("Требование удалено");
+      await adminApi.deleteUser(id);
+      notify("Роль/пользователь удалены");
       await loadData();
     } catch (apiError) {
       setError(parseError(apiError));
     }
   };
 
+  // --- Правила ---
   const createRule = async (payload) => {
-    await adminApi.createRule(payload);
-    await loadData();
+    try {
+      await adminApi.createRule(payload);
+      notify("Правило добавлено");
+      await loadData();
+    } catch (apiError) {
+      setError(parseError(apiError));
+    }
   };
 
   const updateRule = async (id, payload) => {
-    await adminApi.updateRule(id, payload);
-    await loadData();
+    try {
+      await adminApi.updateRule(id, payload);
+      notify("Правило обновлено");
+      await loadData();
+    } catch (apiError) {
+      setError(parseError(apiError));
+    }
   };
 
   const deleteRule = async (id) => {
-    await adminApi.deleteRule(id);
-    await loadData();
+    if (!window.confirm("Удалить правило?")) {
+      return;
+    }
+    try {
+      await adminApi.deleteRule(id);
+      notify("Правило удалено");
+      await loadData();
+    } catch (apiError) {
+      setError(parseError(apiError));
+    }
   };
 
   if (loading) {
-    return <p>Загрузка админ-панели...</p>;
+    return <p style={{ padding: 20 }}>Загрузка админки...</p>;
   }
 
   return (
     <main style={styles.page}>
       <header style={styles.header}>
         <div>
-          <h1>Кабинет администратора</h1>
-          <p>
+          <h1 style={styles.title}>Личный кабинет: Админ</h1>
+          <p style={styles.subtitle}>
             Пользователь: {user.name} ({user.role})
           </p>
         </div>
         <button onClick={onLogout}>Выйти</button>
       </header>
 
+      <nav style={styles.tabs}>
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            style={{
+              ...styles.tabButton,
+              ...(activeTab === tab.id ? styles.tabButtonActive : {}),
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
       {error ? <div style={styles.error}>{error}</div> : null}
       {message ? <div style={styles.message}>{message}</div> : null}
 
-      <section style={styles.card}>
-        <h3>{editingUserId ? "Редактировать пользователя" : "Новый пользователь"}</h3>
-        <form onSubmit={submitUser} style={styles.formGrid}>
-          <input
-            required
-            placeholder="Имя"
-            value={userForm.name}
-            onChange={(event) => setUserForm((prev) => ({ ...prev, name: event.target.value }))}
+      {activeTab === "systems" ? (
+        <section style={styles.grid}>
+          <TemplateForm
+            onSubmit={editingSystem ? updateSystem : createSystem}
+            initialTemplate={editingSystem}
+            submitLabel={editingSystem ? "Сохранить систему" : "Добавить систему"}
+            onCancel={editingSystem ? () => setEditingSystem(null) : undefined}
           />
-          <input
-            required
-            type="email"
-            placeholder="Email"
-            value={userForm.email}
-            onChange={(event) => setUserForm((prev) => ({ ...prev, email: event.target.value }))}
-          />
-          <input
-            type="password"
-            placeholder={editingUserId ? "Новый пароль (опционально)" : "Пароль"}
-            required={!editingUserId}
-            value={userForm.password}
-            onChange={(event) => setUserForm((prev) => ({ ...prev, password: event.target.value }))}
-          />
-          <select
-            value={userForm.role}
-            onChange={(event) => setUserForm((prev) => ({ ...prev, role: event.target.value }))}
-          >
-            <option value="аналитик">аналитик</option>
-            <option value="админ">админ</option>
-          </select>
-          <button type="submit">{editingUserId ? "Сохранить" : "Создать"}</button>
-          {editingUserId ? (
-            <button
-              type="button"
-              onClick={() => {
-                setEditingUserId(null);
-                setUserForm(emptyUser);
-              }}
-            >
-              Отмена
-            </button>
-          ) : null}
-        </form>
 
-        <table style={styles.table}>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Role</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((item) => (
-              <tr key={item.id}>
-                <td>{item.id}</td>
-                <td>{item.name}</td>
-                <td>{item.email}</td>
-                <td>{item.role}</td>
-                <td style={styles.row}>
-                  <button type="button" onClick={() => editUser(item)}>
-                    Edit
+          <section style={styles.card}>
+            <h3>Список систем</h3>
+            <ul style={styles.list}>
+              {systems.map((system) => (
+                <li key={system.id} style={styles.listItem}>
+                  <button
+                    type="button"
+                    style={{
+                      ...styles.selectSystemButton,
+                      ...(selectedSystemId === system.id ? styles.selectSystemButtonActive : {}),
+                    }}
+                    onClick={() => setSelectedSystemId(system.id)}
+                  >
+                    <strong>{system.name}</strong>
+                    <span style={styles.muted}>{system.description || "Без описания"}</span>
                   </button>
-                  <button type="button" onClick={() => removeUser(item.id)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {!users.length ? (
-              <tr>
-                <td colSpan={5}>Пользователей нет</td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </section>
+                  <div style={styles.row}>
+                    <button type="button" onClick={() => setEditingSystem(system)}>
+                      Редактировать
+                    </button>
+                    <button type="button" onClick={() => removeSystem(system.id)}>
+                      Удалить
+                    </button>
+                  </div>
+                </li>
+              ))}
+              {!systems.length ? <li>Пока нет систем</li> : null}
+            </ul>
+          </section>
 
-      <section style={styles.grid}>
-        <TemplateForm
-          onSubmit={editingTemplate ? updateTemplate : createTemplate}
-          initialTemplate={editingTemplate}
-          submitLabel={editingTemplate ? "Обновить шаблон" : "Создать шаблон"}
-          onCancel={editingTemplate ? () => setEditingTemplate(null) : undefined}
-        />
-        <section style={styles.card}>
-          <h3>Шаблоны</h3>
-          <select
-            style={styles.select}
-            value={selectedTemplateId || ""}
-            onChange={(event) => setSelectedTemplateId(Number(event.target.value))}
-          >
-            <option value="">Выберите шаблон</option>
-            {templates.map((template) => (
-              <option key={template.id} value={template.id}>
-                #{template.id} {template.name}
-              </option>
-            ))}
-          </select>
-          <ul style={styles.list}>
-            {templates.map((template) => (
-              <li key={template.id} style={styles.listItem}>
-                <div>
-                  <strong>{template.name}</strong>
-                  <div style={styles.muted}>{template.description || "Без описания"}</div>
-                </div>
-                <div style={styles.row}>
-                  <button type="button" onClick={() => setEditingTemplate(template)}>
-                    Edit
-                  </button>
-                  <button type="button" onClick={() => removeTemplate(template.id)}>
-                    Delete
-                  </button>
-                </div>
-              </li>
-            ))}
-            {!templates.length ? <li>Шаблонов нет</li> : null}
-          </ul>
+          <SchemaViewer
+            title={selectedSystem ? `Схема: ${selectedSystem.name}` : "Схема системы"}
+            schema={selectedSystem?.schema || ""}
+            allowEditing={false}
+          />
         </section>
-        <SchemaViewer schema={selectedTemplate?.schema} />
-      </section>
+      ) : null}
 
-      <section style={styles.card}>
-        <h3>{editingRequirementId ? "Редактировать требование" : "Новое требование"}</h3>
-        <form onSubmit={submitRequirement} style={styles.formGrid}>
-          <select
-            required
-            value={requirementForm.templateId}
-            onChange={(event) =>
-              setRequirementForm((prev) => ({ ...prev, templateId: event.target.value }))
-            }
-          >
-            <option value="">Выберите шаблон</option>
-            {templates.map((template) => (
-              <option key={template.id} value={template.id}>
-                #{template.id} {template.name}
-              </option>
-            ))}
-          </select>
-          <input
-            required
-            placeholder="Заголовок"
-            value={requirementForm.title}
-            onChange={(event) =>
-              setRequirementForm((prev) => ({ ...prev, title: event.target.value }))
-            }
-          />
-          <input
-            placeholder="Подробности"
-            value={requirementForm.details}
-            onChange={(event) =>
-              setRequirementForm((prev) => ({ ...prev, details: event.target.value }))
-            }
-          />
-          <select
-            value={requirementForm.status}
-            onChange={(event) =>
-              setRequirementForm((prev) => ({ ...prev, status: event.target.value }))
-            }
-          >
-            <option value="draft">draft</option>
-            <option value="approved">approved</option>
-            <option value="rejected">rejected</option>
-          </select>
-          <input
-            placeholder="ID аналитика (опционально)"
-            value={requirementForm.analystId}
-            onChange={(event) =>
-              setRequirementForm((prev) => ({ ...prev, analystId: event.target.value }))
-            }
-          />
-          <button type="submit">{editingRequirementId ? "Сохранить" : "Создать"}</button>
-          {editingRequirementId ? (
-            <button
-              type="button"
-              onClick={() => {
-                setEditingRequirementId(null);
-                setRequirementForm(emptyRequirement);
-              }}
+      {activeTab === "roles" ? (
+        <section style={styles.card}>
+          <h3>{editingRoleId ? "Редактировать роль" : "Добавить роль"}</h3>
+          <form onSubmit={submitRole} style={styles.formGrid}>
+            <input
+              required
+              placeholder="Имя"
+              value={roleForm.name}
+              onChange={(event) => setRoleForm((prev) => ({ ...prev, name: event.target.value }))}
+            />
+            <input
+              required
+              type="email"
+              placeholder="Email"
+              value={roleForm.email}
+              onChange={(event) => setRoleForm((prev) => ({ ...prev, email: event.target.value }))}
+            />
+            <input
+              type="password"
+              required={!editingRoleId}
+              placeholder={editingRoleId ? "Новый пароль (необязательно)" : "Пароль"}
+              value={roleForm.password}
+              onChange={(event) =>
+                setRoleForm((prev) => ({ ...prev, password: event.target.value }))
+              }
+            />
+            <select
+              value={roleForm.role}
+              onChange={(event) => setRoleForm((prev) => ({ ...prev, role: event.target.value }))}
             >
-              Отмена
-            </button>
-          ) : null}
-        </form>
-
-        <table style={styles.table}>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Template</th>
-              <th>Title</th>
-              <th>Status</th>
-              <th>Analyst</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {requirements.map((item) => (
-              <tr key={item.id}>
-                <td>{item.id}</td>
-                <td>{item.template_id}</td>
-                <td>{item.title}</td>
-                <td>{item.status}</td>
-                <td>{item.analyst_id ?? "-"}</td>
-                <td style={styles.row}>
-                  <button type="button" onClick={() => editRequirement(item)}>
-                    Edit
-                  </button>
-                  <button type="button" onClick={() => removeRequirement(item.id)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {!requirements.length ? (
-              <tr>
-                <td colSpan={6}>Требований нет</td>
-              </tr>
+              <option value="аналитик">аналитик</option>
+              <option value="админ">админ</option>
+            </select>
+            <button type="submit">{editingRoleId ? "Сохранить" : "Добавить"}</button>
+            {editingRoleId ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingRoleId(null);
+                  setRoleForm(emptyRoleForm);
+                }}
+              >
+                Отмена
+              </button>
             ) : null}
-          </tbody>
-        </table>
-      </section>
+          </form>
 
-      <RuleTable
-        rules={rules}
-        templates={templates}
-        onCreate={createRule}
-        onUpdate={updateRule}
-        onDelete={deleteRule}
-      />
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Имя</th>
+                <th>Email</th>
+                <th>Роль</th>
+                <th>Управление</th>
+              </tr>
+            </thead>
+            <tbody>
+              {roles.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.id}</td>
+                  <td>{item.name}</td>
+                  <td>{item.email}</td>
+                  <td>{item.role}</td>
+                  <td style={styles.row}>
+                    <button type="button" onClick={() => startEditRole(item)}>
+                      Редактировать
+                    </button>
+                    <button type="button" onClick={() => removeRole(item.id)}>
+                      Удалить
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {!roles.length ? (
+                <tr>
+                  <td colSpan={5}>Роли не созданы</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </section>
+      ) : null}
+
+      {activeTab === "rules" ? (
+        <RuleTable
+          rules={rules}
+          templates={systems}
+          roleOptions={roles}
+          onCreate={createRule}
+          onUpdate={updateRule}
+          onDelete={deleteRule}
+        />
+      ) : null}
     </main>
   );
 }
 
 const styles = {
   page: {
-    maxWidth: 1260,
+    maxWidth: 1280,
     margin: "0 auto",
     padding: 20,
-    background: "#f4f6fb",
+    background: "#f4f7ff",
     minHeight: "100vh",
     display: "grid",
-    gap: 16,
+    gap: 14,
   },
   header: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    border: "1px solid #ddd",
-    borderRadius: 8,
+    border: "1px solid #dde2f2",
+    borderRadius: 12,
     padding: 16,
     background: "#fff",
   },
+  title: { margin: 0 },
+  subtitle: { margin: "4px 0 0", color: "#4d5a82" },
+  tabs: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  tabButton: {
+    border: "1px solid #c8d0eb",
+    background: "#fff",
+    borderRadius: 10,
+    padding: "8px 14px",
+    cursor: "pointer",
+  },
+  tabButtonActive: {
+    background: "#1f4fff",
+    color: "#fff",
+    borderColor: "#1f4fff",
+  },
   grid: {
     display: "grid",
-    gap: 16,
-    gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))",
+    gap: 14,
+    gridTemplateColumns: "1.1fr 1fr 1fr",
   },
   card: {
-    border: "1px solid #ddd",
-    borderRadius: 8,
+    border: "1px solid #dde2f2",
+    borderRadius: 12,
     background: "#fff",
     padding: 16,
   },
   formGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
     gap: 8,
-    marginBottom: 12,
+    marginBottom: 14,
   },
-  table: { width: "100%", borderCollapse: "collapse" },
-  row: { display: "flex", gap: 6 },
-  list: { listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 8 },
+  table: {
+    width: "100%",
+    borderCollapse: "collapse",
+  },
+  row: { display: "flex", gap: 6, flexWrap: "wrap" },
+  list: { listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8 },
   listItem: {
-    display: "flex",
-    justifyContent: "space-between",
+    display: "grid",
+    gridTemplateColumns: "1fr auto",
     gap: 8,
-    border: "1px solid #eee",
-    borderRadius: 6,
+    border: "1px solid #e6ebfb",
+    borderRadius: 10,
     padding: 8,
+    alignItems: "center",
   },
-  select: { width: "100%", marginBottom: 10, padding: 8 },
-  muted: { color: "#666", fontSize: 13 },
+  selectSystemButton: {
+    border: "1px solid #e6ebfb",
+    borderRadius: 8,
+    padding: 8,
+    textAlign: "left",
+    background: "#fff",
+    display: "grid",
+    gap: 4,
+    cursor: "pointer",
+  },
+  selectSystemButtonActive: {
+    borderColor: "#1f4fff",
+    background: "#edf2ff",
+  },
+  muted: { color: "#596993", fontSize: 13 },
   error: {
     color: "#900",
     background: "#ffeaea",
     border: "1px solid #f0b1b1",
-    borderRadius: 6,
+    borderRadius: 8,
     padding: 10,
   },
   message: {
     color: "#0b5",
     background: "#ebfff4",
     border: "1px solid #9ce2be",
-    borderRadius: 6,
+    borderRadius: 8,
     padding: 10,
   },
 };
