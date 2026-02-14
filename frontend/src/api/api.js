@@ -1,7 +1,8 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "http://localhost:5000/api",
+  // Fallback указывает на внешний IP сервера, чтобы frontend работал с любых клиентских машин.
+  baseURL: import.meta.env.VITE_API_URL || "http://85.209.0.78:5000/api",
 });
 
 api.interceptors.request.use((config) => {
