@@ -10,6 +10,17 @@ const emptyAuthForm = {
   role: "аналитик",
 };
 
+const normalizeRole = (role) => {
+  const normalized = String(role || "")
+    .trim()
+    .toLowerCase();
+
+  if (["админ", "admin", "administrator"].includes(normalized)) {
+    return "админ";
+  }
+  return "аналитик";
+};
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem("token") || "");
   const [user, setUser] = useState(null);
@@ -52,14 +63,17 @@ function App() {
     try {
       if (mode === "login") {
         const response = await authApi.login({
-          email: authForm.email,
+          email: authForm.email.trim(),
           password: authForm.password,
         });
         localStorage.setItem("token", response.data.token);
         setToken(response.data.token);
         setUser(response.data.user);
       } else {
-        const response = await authApi.register(authForm);
+        const response = await authApi.register({
+          ...authForm,
+          email: authForm.email.trim(),
+        });
         localStorage.setItem("token", response.data.token);
         setToken(response.data.token);
         setUser(response.data.user);
@@ -133,7 +147,7 @@ function App() {
     );
   }
 
-  if (user.role === "админ") {
+  if (normalizeRole(user.role) === "админ") {
     return <AdminDashboard user={user} onLogout={logout} />;
   }
 

@@ -1,14 +1,19 @@
 const Template = require("../models/Template");
 const Requirement = require("../models/Requirement");
 const Rule = require("../models/Rule");
+const { normalizeRole } = require("./authController");
 
 function parseId(rawValue) {
   const id = Number(rawValue);
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+function isAdmin(user) {
+  return normalizeRole(user?.role) === "админ";
+}
+
 function canAccessByOwner(record, user) {
-  return user.role === "админ" || record.analyst_id === user.id;
+  return isAdmin(user) || record.analyst_id === user.id;
 }
 
 async function ensureTemplateAccess(templateId, user) {
@@ -26,7 +31,7 @@ async function ensureTemplateAccess(templateId, user) {
 async function listTemplates(req, res) {
   try {
     const templates =
-      req.user.role === "админ"
+      isAdmin(req.user)
         ? await Template.findAll()
         : await Template.findByAnalyst(req.user.id);
     return res.status(200).json(templates);
@@ -44,7 +49,7 @@ async function createTemplate(req, res) {
     }
 
     const ownerId =
-      req.user.role === "админ" && analystId !== undefined ? analystId : req.user.id;
+      isAdmin(req.user) && analystId !== undefined ? analystId : req.user.id;
 
     const template = await Template.create({
       name,
@@ -100,7 +105,7 @@ async function updateTemplate(req, res) {
       description: req.body.description,
       schema: req.body.schema,
     };
-    if (req.user.role === "админ" && req.body.analystId !== undefined) {
+    if (isAdmin(req.user) && req.body.analystId !== undefined) {
       payload.analystId = req.body.analystId;
     }
 
@@ -139,7 +144,7 @@ async function deleteTemplate(req, res) {
 async function listRequirements(req, res) {
   try {
     const requirements =
-      req.user.role === "админ"
+      isAdmin(req.user)
         ? await Requirement.findAll()
         : await Requirement.findByAnalyst(req.user.id);
     return res.status(200).json(requirements);
@@ -162,7 +167,7 @@ async function createRequirement(req, res) {
     }
 
     const ownerId =
-      req.user.role === "админ" && analystId !== undefined ? analystId : req.user.id;
+      isAdmin(req.user) && analystId !== undefined ? analystId : req.user.id;
 
     const requirement = await Requirement.create({
       templateId: Number(templateId),
@@ -227,7 +232,7 @@ async function updateRequirement(req, res) {
       details: req.body.details,
       status: req.body.status,
     };
-    if (req.user.role === "админ" && req.body.analystId !== undefined) {
+    if (isAdmin(req.user) && req.body.analystId !== undefined) {
       payload.analystId = req.body.analystId;
     }
 
@@ -265,7 +270,7 @@ async function deleteRequirement(req, res) {
 // Rules
 async function listRules(req, res) {
   try {
-    const rules = req.user.role === "админ" ? await Rule.findAll() : await Rule.findByAnalyst(req.user.id);
+    const rules = isAdmin(req.user) ? await Rule.findAll() : await Rule.findByAnalyst(req.user.id);
     return res.status(200).json(rules);
   } catch (error) {
     console.error("listRules error:", error);
@@ -288,7 +293,7 @@ async function createRule(req, res) {
     }
 
     const ownerId =
-      req.user.role === "админ" && analystId !== undefined ? analystId : req.user.id;
+      isAdmin(req.user) && analystId !== undefined ? analystId : req.user.id;
 
     const rule = await Rule.create({
       templateId: Number(templateId),
@@ -355,7 +360,7 @@ async function updateRule(req, res) {
       actionText: req.body.actionText,
       priority: req.body.priority !== undefined ? Number(req.body.priority) : undefined,
     };
-    if (req.user.role === "админ" && req.body.analystId !== undefined) {
+    if (isAdmin(req.user) && req.body.analystId !== undefined) {
       payload.analystId = req.body.analystId;
     }
 

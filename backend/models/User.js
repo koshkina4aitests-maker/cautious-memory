@@ -27,7 +27,7 @@ class User {
   }
 
   static async findByEmail(email) {
-    const sql = `SELECT * FROM users WHERE email = $1 LIMIT 1;`;
+    const sql = `SELECT * FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1;`;
     const { rows } = await db.query(sql, [email]);
     return rows[0] || null;
   }

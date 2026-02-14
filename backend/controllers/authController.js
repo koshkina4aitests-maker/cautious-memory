@@ -5,6 +5,31 @@ const User = require("../models/User");
 const JWT_SECRET = process.env.JWT_SECRET || "dev_jwt_secret_change_me";
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
 
+const ROLE_ALIASES = {
+  "аналитик": "аналитик",
+  analyst: "аналитик",
+  analytic: "аналитик",
+  user: "аналитик",
+  "админ": "админ",
+  admin: "админ",
+  administrator: "админ",
+};
+
+function normalizeEmail(email) {
+  if (typeof email !== "string") {
+    return "";
+  }
+  return email.trim().toLowerCase();
+}
+
+function normalizeRole(role) {
+  if (typeof role !== "string") {
+    return null;
+  }
+  const normalizedInput = role.trim().toLowerCase();
+  return ROLE_ALIASES[normalizedInput] || null;
+}
+
 function createToken(user) {
   return jwt.sign(
     {
@@ -18,23 +43,24 @@ function createToken(user) {
 }
 
 function validateRole(role) {
-  return role === "аналитик" || role === "админ";
+  return normalizeRole(role) !== null;
 }
 
 async function register(req, res) {
   try {
     const { name, email, password, role } = req.body;
+    const normalizedEmail = normalizeEmail(email);
 
-    if (!name || !email || !password) {
+    if (!name || !normalizedEmail || !password) {
       return res.status(400).json({ message: "name, email и password обязательны" });
     }
 
-    const safeRole = role || "аналитик";
+    const safeRole = normalizeRole(role || "аналитик");
     if (!validateRole(safeRole)) {
       return res.status(400).json({ message: "Некорректная роль пользователя" });
     }
 
-    const existingUser = await User.findByEmail(email);
+    const existingUser = await User.findByEmail(normalizedEmail);
     if (existingUser) {
       return res.status(409).json({ message: "Пользователь с таким email уже существует" });
     }
@@ -42,7 +68,7 @@ async function register(req, res) {
     const passwordHash = await bcrypt.hash(password, 10);
     const createdUser = await User.create({
       name,
-      email,
+      email: normalizedEmail,
       passwordHash,
       role: safeRole,
     });
@@ -58,11 +84,12 @@ async function register(req, res) {
 async function login(req, res) {
   try {
     const { email, password } = req.body;
-    if (!email || !password) {
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail || !password) {
       return res.status(400).json({ message: "email и password обязательны" });
     }
 
-    const user = await User.findByEmail(email);
+    const user = await User.findByEmail(normalizedEmail);
     if (!user) {
       return res.status(401).json({ message: "Неверный email или пароль" });
     }
@@ -103,8 +130,14 @@ async function me(req, res) {
 }
 
 function authenticateToken(req, res, next) {
-  const authHeader = req.headers.authorization || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  const authHeader = req.headers.authorization;
+  const rawHeader = Array.isArray(authHeader) ? authHeader[0] : authHeader || "";
+  const bearerMatch = rawHeader.match(/^Bearer\s+(.+)$/i);
+  const tokenFromHeader = bearerMatch ? bearerMatch[1] : rawHeader;
+  const token =
+    (typeof tokenFromHeader === "string" && tokenFromHeader.trim()) ||
+    req.headers["x-access-token"] ||
+    null;
 
   if (!token) {
     return res.status(401).json({ message: "Требуется Bearer token" });
@@ -120,8 +153,11 @@ function authenticateToken(req, res, next) {
 }
 
 function authorizeRoles(...allowedRoles) {
+  const normalizedAllowed = allowedRoles.map((role) => normalizeRole(role)).filter(Boolean);
+
   return (req, res, next) => {
-    if (!req.user || !allowedRoles.includes(req.user.role)) {
+    const currentRole = normalizeRole(req.user?.role);
+    if (!currentRole || !normalizedAllowed.includes(currentRole)) {
       return res.status(403).json({ message: "Недостаточно прав доступа" });
     }
     return next();
@@ -134,4 +170,5 @@ module.exports = {
   me,
   authenticateToken,
   authorizeRoles,
+  normalizeRole,
 };

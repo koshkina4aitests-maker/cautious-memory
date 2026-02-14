@@ -3,14 +3,22 @@ const User = require("../models/User");
 const Template = require("../models/Template");
 const Requirement = require("../models/Requirement");
 const Rule = require("../models/Rule");
+const { normalizeRole } = require("./authController");
 
 function parseId(rawValue) {
   const id = Number(rawValue);
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+function normalizeEmail(email) {
+  if (typeof email !== "string") {
+    return "";
+  }
+  return email.trim().toLowerCase();
+}
+
 function isValidRole(role) {
-  return role === "аналитик" || role === "админ";
+  return normalizeRole(role) !== null;
 }
 
 // Users CRUD
@@ -27,15 +35,16 @@ async function listUsers(req, res) {
 async function createUser(req, res) {
   try {
     const { name, email, password, role } = req.body;
-    if (!name || !email || !password) {
+    const normalizedEmail = normalizeEmail(email);
+    if (!name || !normalizedEmail || !password) {
       return res.status(400).json({ message: "name, email и password обязательны" });
     }
-    const safeRole = role || "аналитик";
+    const safeRole = normalizeRole(role || "аналитик");
     if (!isValidRole(safeRole)) {
       return res.status(400).json({ message: "Некорректная роль" });
     }
 
-    const existingUser = await User.findByEmail(email);
+    const existingUser = await User.findByEmail(normalizedEmail);
     if (existingUser) {
       return res.status(409).json({ message: "Пользователь с таким email уже существует" });
     }
@@ -43,7 +52,7 @@ async function createUser(req, res) {
     const passwordHash = await bcrypt.hash(password, 10);
     const createdUser = await User.create({
       name,
-      email,
+      email: normalizedEmail,
       passwordHash,
       role: safeRole,
     });
@@ -85,14 +94,15 @@ async function updateUser(req, res) {
 
     const payload = {
       name: req.body.name,
-      email: req.body.email,
+      email: req.body.email !== undefined ? normalizeEmail(req.body.email) : undefined,
     };
 
     if (req.body.role !== undefined) {
-      if (!isValidRole(req.body.role)) {
+      const normalizedRole = normalizeRole(req.body.role);
+      if (!isValidRole(normalizedRole)) {
         return res.status(400).json({ message: "Некорректная роль" });
       }
-      payload.role = req.body.role;
+      payload.role = normalizedRole;
     }
 
     if (req.body.password) {
